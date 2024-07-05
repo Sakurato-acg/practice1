@@ -1,0 +1,8 @@
+logging:
+  level:
+    org.example: debug
+
+info:
+  model: simple
+  timeUnit: ms
+  open: false
