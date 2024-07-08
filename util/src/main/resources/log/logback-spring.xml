@@ -119,7 +119,7 @@
     </root>
 
     <root level="info">
-        <appender-ref ref="file_all"/>
+<!--        <appender-ref ref="file_all"/>-->
         <!--        <appender-ref ref="file_info"/>-->
         <!--        <appender-ref ref="file_error"/>-->
         <!--        <appender-ref ref="file_warn"/>-->

@@ -26,9 +26,8 @@ public class LogFilter extends OncePerRequestFilter implements Ordered {
      * 实现 TransmittableThreadLocal 的 initialValue,beforeExecute,afterExecute接口
      */
     static TransmittableThreadLocal<Map<String, String>> ttlMDC = new TransmittableThreadLocal<>() {
-        /**
-         * 在多线程数据传递的时候，将数据复制一份给MDC
-         */
+
+        // 在多线程数据传递的时候，将数据复制一份给MDC
         @Override
         protected void beforeExecute() {
             final Map<String, String> mdc = get();
@@ -44,6 +43,7 @@ public class LogFilter extends OncePerRequestFilter implements Ordered {
         protected Map<String, String> initialValue() {
             return new HashMap<>();
         }
+
     };
 
     @Override

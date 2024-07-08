@@ -5,7 +5,8 @@
     <option name="originalFiles">
       <list>
         <option value="$PROJECT_DIR$/pom.xml" />
-        <option value="$USER_HOME$/eclipse-workspace/middleware/pom.xml" />
+        <option value="$PROJECT_DIR$/EasyExcel/pom.xml" />
+        <option value="$PROJECT_DIR$/websocket/pom.xml" />
       </list>
     </option>
   </component>

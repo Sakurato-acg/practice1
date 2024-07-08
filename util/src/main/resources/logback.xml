@@ -3,7 +3,8 @@
     <property name="log.pattern"
               value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level ${PID:- } --- [%15.15t] %-40.40logger{39} : %m%n"
     />
-    <property name="CONSOLE_LOG_PATTERN" value="%X{traceId}  %d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) %boldYellow([%thread])  %cyan(%logger{15}) %msg%n"/>
+    <property name="CONSOLE_LOG_PATTERN"
+              value="%X{traceId}  %d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) %boldYellow([%thread])  %cyan(%logger{15}) %msg%n"/>
 
     <appender name="console" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
@@ -20,5 +21,20 @@
     <root level="info">
         <appender-ref ref="console"/>
     </root>
+    <!-- 异步处理 ，
+    queueSize=500，则discardingThreshold 的取值范围： 0 <= discardingThreshold <= 500。
+    discardingThreshold =0时，表示剩余容量在小于0%的时候，日志级别<=INFO的内容才不会打印；
+    但剩余容量最少也只会等于0%，不会小于0%，所以在此情况下所有日志级别都会打印。
+    discardingThreshold = 500时，表示剩余容量在小于100%的时候，
+    日志级别<=INFO的内容不会打印；所以此情况下只会打印WARN、ERROR级别的内容。
+    -->
+    <appender name="ASYNC_DATA" class="ch.qos.logback.classic.AsyncAppender">
+        <discardingThreshold>0</discardingThreshold>
+        <queueSize>500</queueSize>
+        <appender-ref ref="INFO"/>
+    </appender>
+    <shutdownHook class="ch.qos.logback.core.hook.DelayingShutdownHook">
+        <delay>1000</delay><!-- 延迟的时间，单位为毫秒 -->
+    </shutdownHook>
 
 </configuration>

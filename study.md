@@ -729,6 +729,471 @@ public interface MapStructUtil {
 
 
 
+# Websocket
+
+## 什么是消息推送
+
+移动端消息推送示例：
+
+![移动端消息推送示例](https://oss.javaguide.cn/github/javaguide/system-design/web-real-time-message-push/IKleJ9auR1Ojdicyr0bH.png)
+
+Web 端消息推送示例：
+
+![Web 端消息推送示例](https://oss.javaguide.cn/github/javaguide/system-design/web-real-time-message-push/image-20220819100512941.png)
+
+在具体实现之前，咱们再来分析一下前边的需求，其实功能很简单，只要触发某个事件（主动分享了资源或者后台主动推送消息），Web 页面的通知小红点就会实时的 `+1` 就可以了。
+
+通常在服务端会有若干张消息推送表，用来记录用户触发不同事件所推送不同类型的消息，前端主动查询（拉）或者被动接收（推）用户所有未读的消息数。
+
+![消息推送表](https://oss.javaguide.cn/github/javaguide/system-design/web-real-time-message-push/1460000042192384.png)消息推送表
+
+消息推送无非是推（push）和拉（pull）两种形式，下边我们逐个了解下。
+
+## 消息推送常见方案
+
+### 短轮询
+
+短轮询很好理解，指定的时间间隔，由浏览器向服务器发出 HTTP 请求，服务器实时返回未读消息数据给客户端，浏览器再做渲染显示。
+
+一个简单的 JS 定时器就可以搞定，每秒钟请求一次未读消息数接口，返回的数据展示即可。
+
+```typescript
+setInterval(() => {
+  // 方法请求
+  messageCount().then((res) => {
+    if (res.code === 200) {
+      this.messageCount = res.data;
+    }
+  });
+}, 1000);
+```
+
+### 长轮询
+
+```java
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Multimaps;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.async.DeferredResult;
+
+import java.util.Collection;
+import java.util.Date;
+
+@RestController
+public class PollingController {
+
+    // 存放监听某个Id的长轮询集合
+    // 线程同步结构
+    public static Multimap<String, DeferredResult<String>> watchRequests =
+            Multimaps.synchronizedMultimap(HashMultimap.create());
+
+    /**
+     * 设置监听
+     */
+    @GetMapping(path = "/watch/{id}")
+    public DeferredResult<String> watch(@PathVariable String id) {
+        // 延迟对象设置超时时间
+        DeferredResult<String> result = new DeferredResult<>(3 * 1000L);
+        // 异步请求完成时移除 key，防止内存溢出
+        result.onCompletion(() -> {
+            watchRequests.remove(id, result);
+        });
+        // 注册长轮询请求
+        watchRequests.put(id, result);
+        return result;
+    }
+
+    /**
+     * 变更数据
+     */
+    @GetMapping(path = "/publish/{id}")
+    public String publish(@PathVariable String id) {
+        // 数据变更 取出监听ID的所有长轮询请求，并一一响应处理
+        if (watchRequests.containsKey(id)) {
+            Collection<DeferredResult<String>> deferredResults = watchRequests.get(id);
+            for (DeferredResult<String> deferredResult : deferredResults) {
+                deferredResult.setResult("我更新了" + new Date());
+            }
+        }
+        return "success";
+    }
+}
+```
+
+
+
+### SSE
+
+SSE 在服务器和客户端之间打开一个单向通道，服务端响应的不再是一次性的数据包而是`text/event-stream`类型的数据流信息，在有数据变更时从服务器流式传输到客户端。
+
+整体的实现思路有点类似于在线视频播放，视频流会连续不断的推送到浏览器，你也可以理解成，客户端在完成一次用时很长（网络不畅）的下载。
+
+> SSE 与 WebSocket
+
+1. 1. ==SSE== 是基于 HTTP 协议的，它们不需要特殊的协议或服务器实现即可工作；
+   2. ==WebSocket== 需单独服务器来处理协议。
+
+2. 1. ==SSE== 单向通信，只能由服务端向客户端单向通信；
+   2. ==WebSocket== 全双工通信，即通信的双方可以同时发送和接受信息。
+
+SSE 实现简单开发成本低，无需引入其他组件；WebSocket 传输数据需做二次解析，开发门槛高一些。
+
+SSE 默认支持断线重连；WebSocket 则需要自己实现。
+
+SSE 只能传送文本消息，二进制数据需要经过编码后传送；WebSocket 默认支持传送二进制数据。
+
+
+
+
+
+# 分布式限流 - Redisson
+
+## 环境搭建
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.redisson</groupId>
+    <artifactId>redisson-spring-boot-starter</artifactId>
+    <version>3.18.0</version>
+</dependency>
+<!-- 引入aop支持 -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-aop</artifactId>
+</dependency>
+```
+
+代码部分看项目
+
+## 流程
+
+1. AOP 获取限流注解，没有就是释放
+
+2. 表达式非空且入参不满足表达式，则不进行限流
+
+3. 组装key
+
+   1. IP
+   2. PATH
+   3. 入参
+   4. user_agent
+   5. header
+
+4. CacheRateLimiterUtils.tryAcquire 尝试获取令牌
+
+   1. acquire
+
+      1. true，执行point.proceed()
+
+         1. 如果报错，抛异常
+
+            ```js
+            // hasThrowable = true
+            CacheRateLimiterUtil.cancel(key)
+            ```
+
+      2. false，return Error
+
+   2. hasThrowable，表示获取令牌时报错
+
+
+
+```java
+public static boolean tryAcquire(String key,long period,long permit,long timeout){
+    
+}
+```
+
+
+
+## 原理
+
+[谈谈限流算法，以及Redisson实现 - 个人文章 - SegmentFault 思否](https://segmentfault.com/a/1190000043472098#item-3-7)
+
+### 实例
+
+```java
+@RestController
+@RequestMapping("")
+@Slf4j
+public class DemoController {
+    private final RedissonClient redissonClient;
+
+    public DemoController(RedissonClient redissonClient) {
+        this.redissonClient = redissonClient;
+    }
+
+
+    @GetMapping("require")
+    public void hello(Integer num) {
+        RRateLimiter rateLimiter = redissonClient.getRateLimiter("LIMITER_NAME");
+        rateLimiter.trySetRate(RateType.OVERALL, 5, 10, RateIntervalUnit.SECONDS);
+        rateLimiter.tryAcquire(num,1,TimeUnit.MINUTES);
+        
+        log.info("get!");
+    }
+}
+```
+
+### 数据结构
+
+限流算法中，一共用到的 3个 redis key
+
+> key 1：Hash 结构
+
+就是前面 `setRate` 设置的 hash key。按照之前限流器命名“LIMITER_NAME”，这个 redis key 的名字就是 `LIMITER_NAME`。一共有3个值：
+
+1. `rate`：代表速率
+2. `interval`：代表多少时间内产生的令牌
+3. `type`：代表单机还是集群
+
+<img src="picture/image-20240626151419981.png" alt="image-20240626151419981" style="zoom:50%;" />
+
+
+
+> key 2：ZSET 结构
+
+ZSET 记录获取令牌的时间戳，用于时间对比，redis key 的名字是 `{LIMITER_NAME}:permits`。下面讲讲 ZSET 中每个元素的 member 和 score：
+
+1. member`： 包含两个内容：(1)一段8位随机字符串，为了唯一标志性当次获取令牌；（2）数字，即当次获取令牌的数量。不过这些是压缩后存储在 redis 中的，在工具上看时会发现乱码。`
+1. `score`：记录获取令牌的时间戳，如：1667025166312（对应 2022-10-29 14:32:46）
+
+![image-20240626151542036](picture/image-20240626151542036.png)
+
+> 3. key 3： string 结构
+
+记录的是当前令牌桶中剩余的令牌数。redis key 的名字是 `{LIMITER_NAME}:value`。
+
+<img src="picture/image-20240626151612021.png" alt="image-20240626151612021" style="zoom: 67%;" />
+
+### 主要方法
+
+> trySetRate 尝试设置
+
+```java
+@Override
+public RFuture<Boolean> trySetRateAsync(RateType type, long rate, long rateInterval, RateIntervalUnit unit) {
+    return commandExecutor.evalWriteNoRetryAsync(getRawName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
+                "redis.call('hsetnx', KEYS[1], 'rate', ARGV[1]);"
+              + "redis.call('hsetnx', KEYS[1], 'interval', ARGV[2]);"
+              + "return redis.call('hsetnx', KEYS[1], 'type', ARGV[3]);",
+;
+```
+
+核心是其中的 lua 脚本，摘出来看看：
+
+```lua
+redis.call('hsetnx', KEYS[1], 'rate', ARGV[1]);
+redis.call('hsetnx', KEYS[1], 'interval', ARGV[2]);
+return redis.call('hsetnx', KEYS[1], 'type', ARGV[3]);
+```
+
+发现基于一个 hash 类型的redis key 设置了3个值。
+
+不过这里的命令是 `hsetnx`，redis `hsetnx` 命令用于为哈希表中不存在的的字段赋值。
+
+- 如果哈希表不存在，一个新的哈希表被创建并进行 `hset` 操作。
+- 如果字段已经存在于哈希表中，操作无效。
+- 如果 key 不存在，一个新哈希表被创建并执行 `hsetnx` 命令。
+
+这意味着，这个方法只能做配置的初始化，如果后期想要修改配置参数，该方法并不会生效。我们来看看另外一个方法。
+
+
+
+> setRate 重新设置
+
+重新设置是，不管该key之前有没有用，一切都清空回到初始化，重新设置。
+
+```lua
+redis.call('hset', KEYS[1], 'rate', ARGV[1]);
+redis.call('hset', KEYS[1], 'interval', ARGV[2]);
+redis.call('hset', KEYS[1], 'type', ARGV[3]);
+redis.call('del', KEYS[2], KEYS[3]);
+```
+
+上述的参数如下：
+
+- `KEYS[1]`：hash key name
+- `KEYS[2]`：string(value) key name
+- `KEYS[3]`：zset(permits) key name
+- `ARGV[1]`：rate
+- `ARGV[2]`：interval
+- `ARGV[3]`：type
+
+通过这个 lua 的逻辑，就能看出直接用的是 `hset`，会直接重置配置参数，并且同时会将已产生数据的string(value)、zset(permits) 两个key 删掉。是一个彻底的重置方法。
+
+这里回顾一下 `trySetRate` 和 `setRate`，在限流器不变的场景下，我们可以多次调用 `trySetRate`，但是不能调用 `setRate`。因为每调用一次，`redis.call('del', KEYS[2], KEYS[3])` 就会将限流器中数据清空，也就达不到限流功能。
+
+
+
+> 设置过期时间 expire
+
+有没有发现前面针对限流器设置的3个 key，都没有设置过期时间。RRateLimiter 接口在设计上，将设置过期时间单独拧出来了。
+
+```java
+// 设置过期
+boolean expire(long var1, TimeUnit var3);
+// 清除过期（永不过期）
+boolean clearExpire();
+```
+
+值得注意的是，**这个方法是针对3个key一起设置统一的过期时间**
+
+
+
+> 获取令牌（核心）tryAcquire
+
+我们先看看执行 lua 脚本时，所有要传入的参数内容：
+
+- `KEYS[1]`：hash key name
+- `KEYS[2]`：全局 string(value) key name
+- `KEYS[3]`：单机 string(value) key name
+- `KEYS[4]`：全局 zset(permits) key name
+- `KEYS[5]`：单机 zset(permits) key name
+- `ARGV[1]`：当前请求令牌数量
+- `ARGV[2]`：当前时间
+- `ARGV[3]`：8位随机字符串
+
+```lua
+-- rate：间隔时间内产生令牌数量
+-- interval：间隔时间
+-- type：类型：0-全局限流；1-单机限
+local rate = redis.call('hget', KEYS[1], 'rate');
+local interval = redis.call('hget', KEYS[1], 'interval');
+local type = redis.call('hget', KEYS[1], 'type');
+-- 如果3个参数存在空值，错误提示初始化未完成
+assert(rate ~= false and interval ~= false and type ~= false, 'RateLimiter is not initialized')
+local valueName = KEYS[2];
+local permitsName = KEYS[4];
+-- 如果是单机限流，在全局key后拼接上机器唯一标识字符
+if type == '1' then
+    valueName = KEYS[3];
+    permitsName = KEYS[5];
+end ;
+-- 如果：当前请求令牌数 < 窗口时间内令牌产生数量，错误提示请求令牌不能超过rate
+assert(tonumber(rate) >= tonumber(ARGV[1]), 'Requested permits amount could not exceed defined rate');
+-- currentValue = 当前剩余令牌数量
+local currentValue = redis.call('get', valueName);
+-- 非第一次访问，存储剩余令牌数量的 string(value) key 存在，有值（包括 0）
+if currentValue ~= false then
+    -- 当前时间戳往前推一个间隔时间，属于时间窗口以外。时间窗口以外，签发过的令牌，都属于过期令牌，需要回收回来
+    local expiredValues = redis.call('zrangebyscore', permitsName, 0, tonumber(ARGV[2]) - interval);
+    -- 统计可以回收的令牌数量
+    local released = 0;
+    for i, v in ipairs(expiredValues) do
+        -- lua struct的pack/unpack方法，可以理解为文本压缩/解压缩方法
+        local random, permits = struct.unpack('fI', v);
+        released = released + permits;
+    end ;
+    -- 移除 zset(permits) 中过期的令牌签发记录
+    -- 将过期令牌回收回来，重新更新剩余令牌数量
+    if released > 0 then
+        redis.call('zremrangebyscore', permitsName, 0, tonumber(ARGV[2]) - interval);
+        currentValue = tonumber(currentValue) + released;
+        redis.call('set', valueName, currentValue);
+    end ;
+    -- 如果 剩余令牌数量 < 当前请求令牌数量，返回推测可以获得所需令牌数量的时间
+    -- （1）最近一次签发令牌的释放时间 = 最近一次签发令牌的签发时间戳 + 间隔时间(interval)
+    -- （2）推测可获得所需令牌数量的时间 = 最近一次签发令牌的释放时间 - 当前时间戳
+    -- （3）"推测"可获得所需令牌数量的时间，"推测"，是因为不确定最近一次签发令牌数量释放后，加上到时候的剩余令牌数量，是否满足所需令牌数量
+    if tonumber(currentValue) < tonumber(ARGV[1]) then
+        local nearest = redis.call('zrangebyscore', permitsName, '(' .. (tonumber(ARGV[2]) - interval), '+inf', 'withscores', 'limit', 0, 1);
+        return tonumber(nearest[2]) - (tonumber(ARGV[2]) - interval);
+        -- 如果 剩余令牌数量 >= 当前请求令牌数量，可直接记录签发令牌，并从剩余令牌数量中减去当前签发令牌数量
+    else
+        redis.call('zadd', permitsName, ARGV[2], struct.pack('fI', ARGV[3], ARGV[1]));
+        redis.call('decrby', valueName, ARGV[1]);
+        return nil;
+    end ;
+    -- 第一次访问，存储剩余令牌数量的 string(value) key 不存在，为 null，走初始化逻辑
+else
+    redis.call('set', valueName, rate);
+    redis.call('zadd', permitsName, ARGV[2], struct.pack('fI', ARGV[3], ARGV[1]));
+    redis.call('decrby', valueName, ARGV[1]);
+    return nil;
+end ;
+```
+
+简述过程
+
+1. 获取`rate:间隔时间内产生的令牌数量` ，`interva:间隔时间`，`type:类型 0-全局限流 1-单机限流`
+   - 如果三个参数存在空值，则退出
+   - 如果**当前请求令牌数**>=**rate**，退出
+2. 第一次访问
+   - 初始化map，set（当前时间，random+请求令牌数量），string
+3. 非第一次访问
+   - 当前时间戳往前推一个间隔时间，属于时间窗口以外。时间窗口以外，签发过的令牌，都属于过期令牌，需要回收回来
+   - 回收后，**剩余令牌数量 < 当前请求令牌数量**
+   - 如果 **剩余令牌数量 >= 当前请求令牌数量**，可直接记录签发令牌，并从剩余令牌数量中减去当前签发令牌数量
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# StringJoiner
+
+## 介绍
+
+StringJoiner是java.util包下的一个工具类，jdk1.8出来的
+
+作用是在构造字符串时，可以自动添加前缀、后缀及分隔符，而不需要自己去实现这些添加字符的逻辑
+
+## demo
+
+```java
+StringJoiner sj1 = new StringJoiner(",");	
+StringJoiner sj2 = new StringJoiner(",", "[", "]");
+
+// a,b,c
+System.out.println(sj1.add("a").add("b").add("c"));
+
+//[a,b,c]
+System.out.println(sj2.add("a").add("b").add("c"));
+
+//a,b,c,a,b,c
+System.out.println(sj1.merge(sj2));
+
+//[a,b,c,a,b,c,a,b,c]
+System.out.println(sj2.merge(sj1));
+
+//11 = 9 + 前后缀
+System.out.println(sj1.length());
+
+```
+
+
+
+
+
+![image-20240626145424235](picture/image-20240626145424235.png)
+
+
+
+
+
+
+
 
 
 
